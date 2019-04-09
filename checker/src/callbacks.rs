@@ -184,6 +184,7 @@ impl rustc_driver::Callbacks for MiraiCallbacks {
             }
             info!("done with analysis");
         });
-        true // Although MIRAI is only a checker we still need code generation for build scripts.
+        !self.test_run // Although MIRAI is only a checker we still need code generation for build scripts.
+                       // We avoid code gen for test cases because LLVM is not used in a thread safe manner.
     }
 }
