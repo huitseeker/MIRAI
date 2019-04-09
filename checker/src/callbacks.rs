@@ -124,7 +124,7 @@ impl rustc_driver::Callbacks for MiraiCallbacks {
                             constant_value_cache: &mut constant_value_cache,
                             smt_solver: &mut smt_solver,
                         });
-                        let (r, analysis_time_in_seconds) = mir_visitor.visit_body();
+                        let (r, analysis_time_in_seconds) = mir_visitor.visit_body(&name);
                         if analysis_time_in_seconds >= k_limits::MAX_ANALYSIS_TIME_FOR_BODY {
                             // This body is beyond MIRAI for now
                             warn!(
