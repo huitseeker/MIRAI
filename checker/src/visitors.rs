@@ -1024,6 +1024,7 @@ impl<'a, 'b: 'a, 'tcx: 'b, E> MirVisitor<'a, 'b, 'tcx, E> {
             // Assign function result to place
             let target_path = self.visit_place(place);
             let return_value_path = Path::LocalVariable { ordinal: 0 };
+            debug!("function side effects {:?}", function_summary.side_effects);
             // Transfer side effects
             self.transfer_and_refine(
                 &function_summary.side_effects,
@@ -1861,7 +1862,12 @@ impl<'a, 'b: 'a, 'tcx: 'b, E> MirVisitor<'a, 'b, 'tcx, E> {
         let operand = self.visit_operand(operand);
         let result = match un_op {
             mir::UnOp::Neg => operand.neg(Some(self.current_span)),
-            mir::UnOp::Not => operand.not(Some(self.current_span)),
+            mir::UnOp::Not => {
+                if operand.domain.expression.infer_type() != ExpressionType::Bool {
+                    warn!("bad not operand {:?} at {:?}", operand, self.current_span);
+                }
+                operand.not(Some(self.current_span))
+            }
         };
         self.current_environment.update_value_at(path, result);
     }

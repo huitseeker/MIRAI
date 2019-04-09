@@ -11,6 +11,7 @@ use crate::expression::{Expression, ExpressionType};
 use crate::interval_domain::{self, IntervalDomain};
 use crate::k_limits;
 
+use log::warn;
 use rustc::ty::TyKind;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Formatter, Result};
@@ -649,10 +650,17 @@ impl AbstractDomain {
         match &self.expression {
             Expression::Bottom => self.clone(),
             Expression::Not { operand } => (**operand).clone(),
-            _ => Expression::Not {
-                operand: box self.clone(),
+            _ => {
+                if self.expression.infer_type() != ExpressionType::Bool
+                    && !self.expression.infer_type().is_integer()
+                {
+                    warn!("bad not operand {:?}", self.expression);
+                }
+                Expression::Not {
+                    operand: box self.clone(),
+                }
+                .into()
             }
-            .into(),
         }
     }
 

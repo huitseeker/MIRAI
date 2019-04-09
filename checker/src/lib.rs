@@ -39,3 +39,4 @@ pub mod smt_solver;
 pub mod summaries;
 pub mod utils;
 pub mod visitors;
+pub mod z3_solver;
