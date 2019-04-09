@@ -6,7 +6,7 @@
 use crate::abstract_value::{AbstractValue, Path};
 use crate::constant_domain::ConstantDomain;
 use crate::environment::Environment;
-use crate::expression::Expression::{ConditionalExpression, Joined};
+use crate::expression::Expression::{ConditionalExpression, Joined, Widened};
 use crate::expression::{Expression, ExpressionType};
 use crate::interval_domain::{self, IntervalDomain};
 use crate::k_limits;
@@ -850,6 +850,10 @@ impl AbstractDomain {
                 // This is a conservative answer. False does not imply other.subset(self).
                 self.subset(&consequent) && self.subset(&alternate)
             }
+            // (x join y) subset widen { z } if (x join y) subset z
+            (Expression::Joined { .. }, Expression::Widened { operand, .. }) => {
+                self.subset(&operand)
+            }
             // (left join right) is a subset of x if both left and right are subsets of x.
             (Expression::Joined { left, right, .. }, _) => {
                 // This is a conservative answer. False does not imply other.subset(self).
@@ -866,6 +870,9 @@ impl AbstractDomain {
                 cv1 == cv2
             }
             (Expression::Reference(p1), Expression::Reference(p2)) => p1 == p2,
+            (Expression::Widened { path: p1, .. }, Expression::Widened { path: p2, .. }) => {
+                p1 == p2
+            }
             // in all other cases we conservatively answer false
             _ => false,
         }
@@ -884,7 +891,7 @@ impl AbstractDomain {
     /// Constructs an element of the Interval domain for simple expressions.
     pub fn get_as_interval(&self) -> IntervalDomain {
         match &self.expression {
-            Expression::Top => interval_domain::TOP,
+            Expression::Top => interval_domain::BOTTOM,
             Expression::Add { left, right } => left.get_as_interval().add(&right.get_as_interval()),
             Expression::CompileTimeConstant(ConstantDomain::I128(val)) => (*val).into(),
             Expression::CompileTimeConstant(ConstantDomain::U128(val)) => (*val).into(),
@@ -901,7 +908,20 @@ impl AbstractDomain {
             Expression::Mul { left, right } => left.get_as_interval().mul(&right.get_as_interval()),
             Expression::Neg { operand } => operand.get_as_interval().neg(),
             Expression::Sub { left, right } => left.get_as_interval().sub(&right.get_as_interval()),
-            Expression::Variable { .. } => interval_domain::TOP,
+            Expression::Variable { .. } => interval_domain::BOTTOM,
+            Expression::Widened { operand, .. } => {
+                let interval = operand.get_as_interval();
+                if let Expression::Joined { left, .. } = &operand.expression {
+                    let left_interval = left.get_as_interval();
+                    if left_interval.lower_bound() == interval.lower_bound() {
+                        return interval.remove_upper_bound();
+                    }
+                    if left_interval.upper_bound() == interval.upper_bound() {
+                        return interval.remove_lower_bound();
+                    }
+                }
+                interval
+            }
             _ => interval_domain::BOTTOM,
         }
     }
@@ -1047,6 +1067,14 @@ impl AbstractDomain {
                     }
                 }
             }
+            Expression::Widened { path, operand } => {
+                let refined_path = path.refine_paths(environment);
+                Expression::Widened {
+                    path: box refined_path,
+                    operand: box operand.refine_paths(environment),
+                }
+                .into()
+            }
         }
     }
 
@@ -1186,6 +1214,14 @@ impl AbstractDomain {
                     }
                     .into()
                 }
+            }
+            Expression::Widened { path, operand } => {
+                let refined_path = path.refine_parameters(arguments);
+                Expression::Widened {
+                    path: box refined_path,
+                    operand: box operand.refine_parameters(arguments),
+                }
+                .into()
             }
         }
     }
@@ -1376,6 +1412,11 @@ impl AbstractDomain {
                     self.clone()
                 }
             }
+            Expression::Widened { path, operand } => Expression::Widened {
+                path: path.clone(),
+                operand: box operand.refine_with(path_condition, depth + 1),
+            }
+            .into(),
         }
     }
 
@@ -1460,20 +1501,33 @@ impl AbstractDomain {
                 right: box operation(self, right),
             }
             .into(),
+            (Widened { .. }, _) => self.clone(),
+            (_, Widened { .. }) => other.clone(),
             _ => return None,
         };
         Some(result)
     }
 
     /// Returns a domain whose corresponding set of concrete values include all of the values
-    /// corresponding to self and other.The set of values may be less precise (more inclusive) than
+    /// corresponding to self and other. The set of values may be less precise (more inclusive) than
     /// the set returned by join. The chief requirement is that a small number of widen calls
-    /// deterministically lead to Top.
-    pub fn widen(&self, other: &Self, _join_condition: &AbstractDomain) -> Self {
+    /// deterministically lead to a set of values that include of the values that could be stored
+    /// in memory at the given path.
+    pub fn widen(&self, other: &Self, join_condition: &AbstractDomain, path: &Path) -> Self {
         if self == other {
             return self.clone();
         };
-        //todo: #30 don't get to top quite this quickly.
-        Expression::Top.into()
+        if let Widened { .. } = self.expression {
+            return self.clone();
+        }
+        if let Widened { .. } = other.expression {
+            return other.clone();
+        }
+        let operand = self.join(other, join_condition);
+        Expression::Widened {
+            path: box path.clone(),
+            operand: box operand,
+        }
+        .into()
     }
 }
